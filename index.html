@@ -5,9 +5,9 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CS2 CCU Chart (Live)</title>
   <style>
-    :root{ --bg:#fff; --fg:#111; --muted:#666; --card:#fff; --grid:#e7e7e7; --brand:#4c8bf5; }
+    :root{ --bg:#fff; --fg:#111; --muted:#666; --card:#fff; --grid:#e7e7e7; --brand:#4c8bf5; --good:#0a8f3c; --bad:#c43c3c; }
     @media (prefers-color-scheme: dark){
-      :root{ --bg:#0f1115; --fg:#e9eef5; --muted:#a7b0c0; --card:#151922; --grid:#2a2f3a; --brand:#7aa2ff; }
+      :root{ --bg:#0f1115; --fg:#e9eef5; --muted:#a7b0c0; --card:#151922; --grid:#2a2f3a; --brand:#7aa2ff; --good:#36d675; --bad:#ff6b6b; }
     }
     html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
     .wrap{max-width:1600px;margin:0 auto;padding:clamp(8px,2vw,20px)}
@@ -22,11 +22,26 @@
     .chart-box{position:relative;width:100%;height:clamp(300px,60vh,720px)}
     .meta{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:10px;color:var(--muted);font-size:14px}
     .pill{padding:.25rem .6rem;border-radius:999px;background:rgba(127,127,127,.12)}
+    /* Live stat header */
+    .liveRow{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;margin:4px 0 12px}
+    .liveLabel{font-size:14px;color:var(--muted)}
+    .liveValue{font-size:clamp(24px,5vw,40px);font-weight:700;letter-spacing:.2px}
+    .delta{font-size:14px;font-weight:600}
+    .delta.up{color:var(--good)}
+    .delta.down{color:var(--bad)}
   </style>
 </head>
 <body>
   <main class="wrap">
     <section class="card">
+      <!-- LIVE HEADER -->
+      <div class="liveRow" aria-live="polite" aria-atomic="true">
+        <span class="liveLabel">Live players:</span>
+        <span id="liveCount" class="liveValue">—</span>
+        <span id="deltaNow" class="delta"></span>
+      </div>
+
+      <!-- Range buttons -->
       <div class="toolbar" role="tablist" aria-label="Range">
         <button class="btn active" data-range="7d"   role="tab" aria-selected="true">7D</button>
         <button class="btn"         data-range="30d"  role="tab">30D</button>
@@ -39,7 +54,7 @@
 
       <div class="meta">
         <div id="rangeText" class="pill">Connecting…</div>
-        <div class="pill">CS2 concurrent players • auto-updates ~10m</div>
+        <div id="updatedPill" class="pill">—</div>
       </div>
     </section>
   </main>
@@ -63,10 +78,16 @@
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
 
-    const APPID = 730; // CS2
-    const points = db.collection('steam_ccu').doc(String(APPID)).collection('points');
+    // Helpers
+    const fmt = n => Intl.NumberFormat().format(n);
+    const timeAgo = ts => {
+      const d = Date.now() - ts;
+      if (d < 60_000) return "just now";
+      if (d < 3_600_000) return Math.floor(d/60_000) + "m ago";
+      return new Date(ts).toLocaleString();
+    };
 
-    // --- Chart setup (responsive, crisp) ---
+    // Chart setup (responsive, crisp)
     const ctx = document.getElementById('ccuChart').getContext('2d');
     Chart.defaults.devicePixelRatio = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
     const baseGrid = getComputedStyle(document.documentElement).getPropertyValue('--grid').trim();
@@ -93,19 +114,25 @@
           },
           y: {
             beginAtZero: true,
-            ticks: { callback: v => Intl.NumberFormat().format(v) },
+            ticks: { callback: v => fmt(v) },
             grid: { color: baseGrid }
           }
         },
         plugins: {
           legend: { display: true, labels: { boxWidth: 18 } },
-          tooltip: { callbacks: { label: c => ` ${Intl.NumberFormat().format(c.parsed.y)} players` } }
+          tooltip: { callbacks: { label: c => ` ${fmt(c.parsed.y)} players` } }
         }
       }
     });
 
-    // --- Range logic ---
+    const APPID = 730;
+    const points = db.collection('steam_ccu').doc(String(APPID)).collection('points');
+
+    // Range logic
     const $rangeText = document.getElementById('rangeText');
+    const $live = document.getElementById('liveCount');
+    const $delta = document.getElementById('deltaNow');
+    const $updated = document.getElementById('updatedPill');
     const buttons = Array.from(document.querySelectorAll('.btn'));
     let unsubscribe = null;
 
@@ -120,18 +147,42 @@
       return points.where('ts_ms','>=',start).orderBy('ts_ms','asc');
     }
 
+    function updateLive(rows){
+      if (!rows.length) { $live.textContent = '—'; $delta.textContent=''; $updated.textContent='—'; return; }
+      const last = rows[rows.length-1];
+      const prev = rows[rows.length-2];
+      $live.textContent = fmt(last.count);
+
+      if (prev && typeof prev.count === 'number') {
+        const diff = last.count - prev.count;
+        const sign = diff > 0 ? '+' : diff < 0 ? '–' : '';
+        $delta.textContent = diff ? `${sign}${fmt(Math.abs(diff))} since last` : 'no change';
+        $delta.classList.toggle('up', diff > 0);
+        $delta.classList.toggle('down', diff < 0);
+      } else {
+        $delta.textContent = '';
+        $delta.classList.remove('up','down');
+      }
+
+      $updated.textContent = `Last update: ${timeAgo(last.ts_ms)}`;
+      // soft pulse animation when value changes
+      $live.animate([{opacity:.6},{opacity:1}], {duration:220, easing:'ease-out'});
+    }
+
     function render(rows){
       chart.data.labels = rows.map(r => new Date(r.ts_ms));
       chart.data.datasets[0].data = rows.map(r => r.count);
       chart.update('none');
+
       const labels = chart.data.labels;
       $rangeText.textContent = rows.length
         ? `${labels[0].toLocaleDateString()} → ${labels.at(-1).toLocaleDateString()} • ${rows.length} pts`
         : 'No data';
+
+      updateLive(rows);
     }
 
     function listen(range){
-      // clean previous listener
       if (typeof unsubscribe === 'function') { unsubscribe(); unsubscribe = null; }
       $rangeText.textContent = 'Loading…';
 
@@ -145,7 +196,6 @@
       }, err => { console.error(err); $rangeText.textContent = 'Failed to load'; });
     }
 
-    // Hook up buttons
     buttons.forEach(b=>{
       b.addEventListener('click', () => {
         buttons.forEach(x=>x.classList.remove('active'));
@@ -155,17 +205,16 @@
       });
     });
 
-    // initial range
+    // Initial range
     listen('7d');
 
-    // Re-tune x-axis density on resize
+    // Axis density on resize
     const ro = new ResizeObserver(() => {
       chart.options.scales.x.time.unit = (innerWidth < 600 ? 'week' : 'day');
       chart.update('none');
     });
     ro.observe(document.querySelector('.chart-box'));
 
-    // Handle live dark-mode toggle
     matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => location.reload());
   })();
   </script>
