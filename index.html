@@ -5,13 +5,20 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CS2 CCU Chart (Live)</title>
   <style>
-    :root{ --bg:#fff; --fg:#111; --muted:#666; --card:#fff; --grid:#e7e7e7; }
+    :root{ --bg:#fff; --fg:#111; --muted:#666; --card:#fff; --grid:#e7e7e7; --brand:#4c8bf5; }
     @media (prefers-color-scheme: dark){
-      :root{ --bg:#0f1115; --fg:#e9eef5; --muted:#a7b0c0; --card:#151922; --grid:#2a2f3a; }
+      :root{ --bg:#0f1115; --fg:#e9eef5; --muted:#a7b0c0; --card:#151922; --grid:#2a2f3a; --brand:#7aa2ff; }
     }
     html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
     .wrap{max-width:1600px;margin:0 auto;padding:clamp(8px,2vw,20px)}
     .card{background:var(--card);border-radius:16px;box-shadow:0 6px 24px rgba(0,0,0,.06);padding:clamp(10px,2vw,18px)}
+    .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:2px 0 12px}
+    .btn{
+      appearance:none;border:1px solid var(--grid);background:transparent;color:var(--fg);
+      padding:.45rem .7rem;border-radius:999px;font-size:14px;cursor:pointer;transition:.15s;
+    }
+    .btn:hover{background:rgba(127,127,127,.08)}
+    .btn.active{background:var(--brand);border-color:var(--brand);color:#fff}
     .chart-box{position:relative;width:100%;height:clamp(300px,60vh,720px)}
     .meta{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:10px;color:var(--muted);font-size:14px}
     .pill{padding:.25rem .6rem;border-radius:999px;background:rgba(127,127,127,.12)}
@@ -20,7 +27,16 @@
 <body>
   <main class="wrap">
     <section class="card">
+      <div class="toolbar" role="tablist" aria-label="Range">
+        <button class="btn active" data-range="7d"   role="tab" aria-selected="true">7D</button>
+        <button class="btn"         data-range="30d"  role="tab">30D</button>
+        <button class="btn"         data-range="ytd"  role="tab">YTD</button>
+        <button class="btn"         data-range="1y"   role="tab">1Y</button>
+        <button class="btn"         data-range="all"  role="tab">ALL</button>
+      </div>
+
       <div class="chart-box"><canvas id="ccuChart"></canvas></div>
+
       <div class="meta">
         <div id="rangeText" class="pill">Connecting…</div>
         <div class="pill">CS2 concurrent players • auto-updates ~10m</div>
@@ -46,6 +62,9 @@
     };
     firebase.initializeApp(firebaseConfig);
     const db = firebase.firestore();
+
+    const APPID = 730; // CS2
+    const points = db.collection('steam_ccu').doc(String(APPID)).collection('points');
 
     // --- Chart setup (responsive, crisp) ---
     const ctx = document.getElementById('ccuChart').getContext('2d');
@@ -85,32 +104,59 @@
       }
     });
 
-    // --- LIVE QUERY (replaces .get()) ---
-    const APPID = 730;                                 // CS2
-    const start = new Date(new Date().getFullYear(), 0, 1).getTime(); // YTD
-    const ref = db.collection('steam_ccu').doc(String(APPID)).collection('points');
+    // --- Range logic ---
+    const $rangeText = document.getElementById('rangeText');
+    const buttons = Array.from(document.querySelectorAll('.btn'));
+    let unsubscribe = null;
 
-    // Debounce renders if several docs arrive at once
-    let pending = false;
+    function startOfYTD(){ const d=new Date(); return new Date(d.getFullYear(),0,1).getTime(); }
+    function tsDaysAgo(n){ const d=new Date(); d.setDate(d.getDate()-n); d.setHours(0,0,0,0); return d.getTime(); }
+    function tsOneYear(){ const d=new Date(); d.setFullYear(d.getFullYear()-1); d.setHours(0,0,0,0); return d.getTime(); }
+
+    function buildQuery(range){
+      if(range==='all'){ return points.orderBy('ts_ms','asc'); }
+      const map = { '7d': tsDaysAgo(7), '30d': tsDaysAgo(30), 'ytd': startOfYTD(), '1y': tsOneYear() };
+      const start = map[range] ?? startOfYTD();
+      return points.where('ts_ms','>=',start).orderBy('ts_ms','asc');
+    }
+
     function render(rows){
       chart.data.labels = rows.map(r => new Date(r.ts_ms));
       chart.data.datasets[0].data = rows.map(r => r.count);
       chart.update('none');
       const labels = chart.data.labels;
-      document.getElementById('rangeText').textContent =
-        rows.length ? `${labels[0].toLocaleDateString()} → ${labels.at(-1).toLocaleDateString()} • ${rows.length} pts`
-                    : 'No data yet';
+      $rangeText.textContent = rows.length
+        ? `${labels[0].toLocaleDateString()} → ${labels.at(-1).toLocaleDateString()} • ${rows.length} pts`
+        : 'No data';
     }
 
-    ref.where('ts_ms','>=',start).orderBy('ts_ms','asc').onSnapshot(snap => {
-      const rows = snap.docs.map(d => d.data());
-      if (pending) return;          // coalesce burst updates
-      pending = true;
-      requestAnimationFrame(() => { pending = false; render(rows); });
-    }, err => {
-      console.error(err);
-      document.getElementById('rangeText').textContent = 'Failed to load data';
+    function listen(range){
+      // clean previous listener
+      if (typeof unsubscribe === 'function') { unsubscribe(); unsubscribe = null; }
+      $rangeText.textContent = 'Loading…';
+
+      const q = buildQuery(range);
+      let pending = false;
+      unsubscribe = q.onSnapshot(snap => {
+        const rows = snap.docs.map(d => d.data());
+        if (pending) return;
+        pending = true;
+        requestAnimationFrame(()=>{ pending=false; render(rows); });
+      }, err => { console.error(err); $rangeText.textContent = 'Failed to load'; });
+    }
+
+    // Hook up buttons
+    buttons.forEach(b=>{
+      b.addEventListener('click', () => {
+        buttons.forEach(x=>x.classList.remove('active'));
+        b.classList.add('active');
+        buttons.forEach(x=>x.setAttribute('aria-selected', x===b ? 'true':'false'));
+        listen(b.dataset.range);
+      });
     });
+
+    // initial range
+    listen('7d');
 
     // Re-tune x-axis density on resize
     const ro = new ResizeObserver(() => {
@@ -119,7 +165,7 @@
     });
     ro.observe(document.querySelector('.chart-box'));
 
-    // If user toggles dark mode while open, reload to sync colors
+    // Handle live dark-mode toggle
     matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => location.reload());
   })();
   </script>
