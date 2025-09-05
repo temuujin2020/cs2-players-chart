@@ -10,30 +10,33 @@
       :root{ --bg:#0f1115; --fg:#e9eef5; --muted:#a7b0c0; --card:#151922; --grid:#2a2f3a; --brand:#7aa2ff; --good:#36d675; --bad:#ff6b6b; }
     }
     html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
-    .wrap{max-width:1600px;margin:0 auto;padding:clamp(8px,2vw,20px)}
+
+    /* FULL-BLEED LAYOUT */
+    .wrap{width:100vw; margin:0; padding:clamp(8px,2vw,20px)}
     .card{background:var(--card);border-radius:16px;box-shadow:0 6px 24px rgba(0,0,0,.06);padding:clamp(10px,2vw,18px)}
+    .chart-card{max-width:98vw;margin:0 auto}                    /* nearly edge-to-edge */
+    .chart-box{position:relative;width:100%;height:clamp(360px,65vh,860px)} /* wider + taller, still responsive */
+
     .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:2px 0 12px}
     .btn{
       appearance:none;border:1px solid var(--grid);background:transparent;color:var(--fg);
       padding:.45rem .7rem;border-radius:999px;font-size:14px;cursor:pointer;transition:.15s;
     }
-    .btn:hover{background:rgba(127,127,127,.08)}
-    .btn.active{background:var(--brand);border-color:var(--brand);color:#fff}
-    .chart-box{position:relative;width:100%;height:clamp(300px,60vh,720px)}
+    .btn:hover{background:rgba(127,127,127,.08)} .btn.active{background:var(--brand);border-color:var(--brand);color:#fff}
+
     .meta{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:10px;color:var(--muted);font-size:14px}
     .pill{padding:.25rem .6rem;border-radius:999px;background:rgba(127,127,127,.12)}
-    /* Live stat header */
+
+    /* Live header */
     .liveRow{display:flex;flex-wrap:wrap;align-items:baseline;gap:10px;margin:4px 0 12px}
     .liveLabel{font-size:14px;color:var(--muted)}
-    .liveValue{font-size:clamp(24px,5vw,40px);font-weight:700;letter-spacing:.2px}
-    .delta{font-size:14px;font-weight:600}
-    .delta.up{color:var(--good)}
-    .delta.down{color:var(--bad)}
+    .liveValue{font-size:clamp(26px,5.2vw,44px);font-weight:700;letter-spacing:.2px}
+    .delta{font-size:14px;font-weight:600} .delta.up{color:var(--good)} .delta.down{color:var(--bad)}
   </style>
 </head>
 <body>
   <main class="wrap">
-    <section class="card">
+    <section class="card chart-card">
       <!-- LIVE HEADER -->
       <div class="liveRow" aria-live="polite" aria-atomic="true">
         <span class="liveLabel">Live players:</span>
@@ -43,15 +46,17 @@
 
       <!-- Range buttons -->
       <div class="toolbar" role="tablist" aria-label="Range">
-        <button class="btn active" data-range="7d"   role="tab" aria-selected="true">7D</button>
-        <button class="btn"         data-range="30d"  role="tab">30D</button>
-        <button class="btn"         data-range="ytd"  role="tab">YTD</button>
-        <button class="btn"         data-range="1y"   role="tab">1Y</button>
-        <button class="btn"         data-range="all"  role="tab">ALL</button>
+        <button class="btn"         data-range="7d"  role="tab">7D</button>
+        <button class="btn"         data-range="30d" role="tab">30D</button>
+        <button class="btn active"  data-range="ytd" role="tab" aria-selected="true">YTD</button>
+        <button class="btn"         data-range="1y"  role="tab">1Y</button>
+        <button class="btn"         data-range="all" role="tab">ALL</button>
       </div>
 
+      <!-- Chart -->
       <div class="chart-box"><canvas id="ccuChart"></canvas></div>
 
+      <!-- Meta -->
       <div class="meta">
         <div id="rangeText" class="pill">Connecting…</div>
         <div id="updatedPill" class="pill">—</div>
@@ -69,7 +74,7 @@
 
   <script>
   (function () {
-    // --- Your Firebase project ---
+    // Firebase project
     const firebaseConfig = {
       apiKey: "AIzaSyBUAUZIA65lB7gsPP6UVk2PBDzoFl53Ob4",
       authDomain: "cs2-players-data.firebaseapp.com",
@@ -87,7 +92,7 @@
       return new Date(ts).toLocaleString();
     };
 
-    // Chart setup (responsive, crisp)
+    // Chart setup (responsive + crisp)
     const ctx = document.getElementById('ccuChart').getContext('2d');
     Chart.defaults.devicePixelRatio = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
     const baseGrid = getComputedStyle(document.documentElement).getPropertyValue('--grid').trim();
@@ -97,10 +102,7 @@
       data: { labels: [], datasets: [{
         label: 'CS2 Concurrent Players',
         data: [],
-        borderWidth: 2,
-        tension: .25,
-        pointRadius: 0,
-        fill: false
+        borderWidth: 2, tension: .25, pointRadius: 0, fill: false
       }]},
       options: {
         responsive: true, maintainAspectRatio: false, animation: false,
@@ -109,7 +111,7 @@
         scales: {
           x: {
             type: 'time',
-            time: { unit: (matchMedia('(max-width:600px)').matches ? 'week' : 'day') },
+            time: { unit: (matchMedia('(max-width:700px)').matches ? 'week' : 'day') },
             grid: { color: baseGrid }
           },
           y: {
@@ -125,10 +127,11 @@
       }
     });
 
+    // Firestore refs
     const APPID = 730;
     const points = db.collection('steam_ccu').doc(String(APPID)).collection('points');
 
-    // Range logic
+    // UI refs
     const $rangeText = document.getElementById('rangeText');
     const $live = document.getElementById('liveCount');
     const $delta = document.getElementById('deltaNow');
@@ -136,6 +139,7 @@
     const buttons = Array.from(document.querySelectorAll('.btn'));
     let unsubscribe = null;
 
+    // Range helpers
     function startOfYTD(){ const d=new Date(); return new Date(d.getFullYear(),0,1).getTime(); }
     function tsDaysAgo(n){ const d=new Date(); d.setDate(d.getDate()-n); d.setHours(0,0,0,0); return d.getTime(); }
     function tsOneYear(){ const d=new Date(); d.setFullYear(d.getFullYear()-1); d.setHours(0,0,0,0); return d.getTime(); }
@@ -147,25 +151,18 @@
       return points.where('ts_ms','>=',start).orderBy('ts_ms','asc');
     }
 
-    function updateLive(rows){
+    function updateLiveFromRows(rows){
       if (!rows.length) { $live.textContent = '—'; $delta.textContent=''; $updated.textContent='—'; return; }
       const last = rows[rows.length-1];
       const prev = rows[rows.length-2];
       $live.textContent = fmt(last.count);
-
       if (prev && typeof prev.count === 'number') {
         const diff = last.count - prev.count;
         const sign = diff > 0 ? '+' : diff < 0 ? '–' : '';
         $delta.textContent = diff ? `${sign}${fmt(Math.abs(diff))} since last` : 'no change';
-        $delta.classList.toggle('up', diff > 0);
-        $delta.classList.toggle('down', diff < 0);
-      } else {
-        $delta.textContent = '';
-        $delta.classList.remove('up','down');
-      }
-
+        $delta.classList.toggle('up', diff > 0); $delta.classList.toggle('down', diff < 0);
+      } else { $delta.textContent = ''; $delta.classList.remove('up','down'); }
       $updated.textContent = `Last update: ${timeAgo(last.ts_ms)}`;
-      // soft pulse animation when value changes
       $live.animate([{opacity:.6},{opacity:1}], {duration:220, easing:'ease-out'});
     }
 
@@ -173,29 +170,32 @@
       chart.data.labels = rows.map(r => new Date(r.ts_ms));
       chart.data.datasets[0].data = rows.map(r => r.count);
       chart.update('none');
-
       const labels = chart.data.labels;
-      $rangeText.textContent = rows.length
-        ? `${labels[0].toLocaleDateString()} → ${labels.at(-1).toLocaleDateString()} • ${rows.length} pts`
-        : 'No data';
-
-      updateLive(rows);
+      $rangeText.textContent = rows.length ? `${labels[0].toLocaleDateString()} → ${labels.at(-1).toLocaleDateString()} • ${rows.length} pts` : 'No data';
+      updateLiveFromRows(rows);
     }
 
     function listen(range){
       if (typeof unsubscribe === 'function') { unsubscribe(); unsubscribe = null; }
       $rangeText.textContent = 'Loading…';
-
       const q = buildQuery(range);
       let pending = false;
       unsubscribe = q.onSnapshot(snap => {
         const rows = snap.docs.map(d => d.data());
-        if (pending) return;
-        pending = true;
+        if (pending) return; pending = true;
         requestAnimationFrame(()=>{ pending=false; render(rows); });
       }, err => { console.error(err); $rangeText.textContent = 'Failed to load'; });
     }
 
+    // Independent latest-point listener (always keeps live header fresh)
+    points.orderBy('ts_ms','desc').limit(1).onSnapshot(snap=>{
+      const doc = snap.docs[0]; if (!doc) return;
+      const last = doc.data();
+      $live.textContent = fmt(last.count);
+      $updated.textContent = `Last update: ${timeAgo(last.ts_ms)}`;
+    });
+
+    // Buttons
     buttons.forEach(b=>{
       b.addEventListener('click', () => {
         buttons.forEach(x=>x.classList.remove('active'));
@@ -205,16 +205,17 @@
       });
     });
 
-    // Initial range
-    listen('7d');
+    // Default = YTD (so you always see history)
+    listen('ytd');
 
-    // Axis density on resize
+    // Adjust x-axis density on resize
     const ro = new ResizeObserver(() => {
-      chart.options.scales.x.time.unit = (innerWidth < 600 ? 'week' : 'day');
+      chart.options.scales.x.time.unit = (innerWidth < 700 ? 'week' : 'day');
       chart.update('none');
     });
     ro.observe(document.querySelector('.chart-box'));
 
+    // Re-sync colors if user toggles dark mode while open
     matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => location.reload());
   })();
   </script>
