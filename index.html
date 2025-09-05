@@ -1,15 +1,42 @@
 <!doctype html>
-<html>
+<html lang="en">
 <head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>CS2 CCU Chart</title>
+  <style>
+    :root{
+      --bg:#ffffff; --fg:#111; --muted:#666; --card:#fff; --grid:#e7e7e7;
+    }
+    @media (prefers-color-scheme: dark){
+      :root{
+        --bg:#0f1115; --fg:#e9eef5; --muted:#a7b0c0; --card:#151922; --grid:#2a2f3a;
+      }
+    }
+    html,body{height:100%;margin:0;background:var(--bg);color:var(--fg);font-family:system-ui,-apple-system,Segoe UI,Roboto,Inter,Arial,sans-serif}
+    .wrap{max-width:1600px;margin:0 auto;padding:clamp(8px,2vw,20px)}
+    .card{background:var(--card);border-radius:16px;box-shadow:0 6px 24px rgba(0,0,0,.06);padding:clamp(10px,2vw,18px)}
+    /* The canvas should grow with width and use a fluid height */
+    .chart-box{position:relative;width:100%;}
+    /* Height scales with viewport: taller on desktop, shorter on phones */
+    .chart-box{height: clamp(300px, 60vh, 720px);}
+    /* Meta row */
+    .meta{display:flex;gap:12px;flex-wrap:wrap;align-items:center;justify-content:space-between;margin-top:10px;color:var(--muted);font-size:14px}
+    .pill{padding:.25rem .6rem;border-radius:999px;background:rgba(127,127,127,.12)}
+  </style>
 </head>
 <body>
-  <div style="max-width:960px;margin:16px auto">
-    <canvas id="ccuChart" height="360"></canvas>
-    <div id="ccuMeta" style="font:13px/1.4 system-ui;color:#555;margin-top:8px"></div>
-  </div>
+  <main class="wrap">
+    <section class="card">
+      <div class="chart-box">
+        <canvas id="ccuChart"></canvas>
+      </div>
+      <div class="meta">
+        <div id="rangeText" class="pill">Loading…</div>
+        <div class="pill">CS2 concurrent players (updates ~10m)</div>
+      </div>
+    </section>
+  </main>
 
   <!-- Firebase compat builds -->
   <script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
@@ -21,6 +48,7 @@
 
   <script>
   (function () {
+    // --- Config (replace with yours if you change project) ---
     const firebaseConfig = {
       apiKey: "AIzaSyBUAUZIA65lB7gsPP6UVk2PBDzoFl53Ob4",
       authDomain: "cs2-players-data.firebaseapp.com",
@@ -30,29 +58,85 @@
     const db = firebase.firestore();
 
     const APPID = 730; // CS2
-    const start = new Date(new Date().getFullYear(), 0, 1).getTime();
+    const start = new Date(new Date().getFullYear(), 0, 1).getTime(); // YTD
 
+    const ctx = document.getElementById('ccuChart').getContext('2d', { willReadFrequently: false });
+    // DPR-aware rendering for crisp lines
+    const dpr = Math.max(1, Math.min(2, window.devicePixelRatio || 1));
+    Chart.defaults.devicePixelRatio = dpr;
+
+    const baseGrid = getComputedStyle(document.documentElement).getPropertyValue('--grid').trim();
+    const dark = window.matchMedia('(prefers-color-scheme: dark)').matches;
+
+    const chart = new Chart(ctx, {
+      type: 'line',
+      data: { labels: [], datasets: [{
+        label: 'CS2 Concurrent Players',
+        data: [],
+        borderWidth: 2,
+        tension: .25,
+        pointRadius: 0,
+        fill: false
+      }]},
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        interaction: { mode: 'nearest', intersect: false },
+        layout: { padding: { left: 4, right: 8, top: 8, bottom: 0 } },
+        scales: {
+          x: {
+            type: 'time',
+            time: {
+              // Fewer ticks on small screens
+              unit: (matchMedia('(max-width:600px)').matches ? 'week' : 'day')
+            },
+            grid: { color: baseGrid }
+          },
+          y: {
+            beginAtZero: true,
+            ticks: { callback: v => Intl.NumberFormat().format(v) },
+            grid: { color: baseGrid }
+          }
+        },
+        plugins: {
+          legend: { display: true, labels: { boxWidth: 18, usePointStyle: false } },
+          tooltip: {
+            callbacks: {
+              label: ctx => ` ${Intl.NumberFormat().format(ctx.parsed.y)} players`
+            }
+          }
+        }
+      }
+    });
+
+    // Fetch YTD points, then render
     const ref = db.collection('steam_ccu').doc(String(APPID)).collection('points');
     ref.where('ts_ms','>=',start).orderBy('ts_ms','asc').get().then(snap=>{
       const rows = snap.docs.map(d=>d.data());
-      const labels = rows.map(r=>new Date(r.ts_ms));
-      const data   = rows.map(r=>r.count);
+      chart.data.labels = rows.map(r=>new Date(r.ts_ms));
+      chart.data.datasets[0].data = rows.map(r=>r.count);
+      chart.update('none');
 
-      const ctx = document.getElementById('ccuChart').getContext('2d');
-      new Chart(ctx, {
-        type:'line',
-        data:{ labels, datasets:[{ label:'CS2 Concurrent Players', data, borderWidth:2, tension:.2, pointRadius:0 }] },
-        options:{ responsive:true, animation:false,
-          scales:{ x:{ type:'time', time:{ unit:'day' } },
-                   y:{ beginAtZero:true, ticks:{ callback:v=>Intl.NumberFormat().format(v) } } }
-        }
-      });
-      document.getElementById('ccuMeta').textContent =
-        rows.length ? `${labels[0].toLocaleDateString()} → ${labels.at(-1).toLocaleDateString()} • ${rows.length} points` :
-                      'No data yet.';
-    }).catch(()=>{
-      document.getElementById('ccuMeta').textContent = 'Failed to load data.';
+      const labels = chart.data.labels;
+      const txt = rows.length
+        ? `${labels[0].toLocaleDateString()} → ${labels.at(-1).toLocaleDateString()} • ${rows.length} pts`
+        : 'No data yet';
+      document.getElementById('rangeText').textContent = txt;
+    }).catch(err=>{
+      document.getElementById('rangeText').textContent = 'Failed to load data';
+      console.error(err);
     });
+
+    // Recalculate x-axis density on resize
+    const ro = new ResizeObserver(() => {
+      chart.options.scales.x.time.unit = (innerWidth < 600 ? 'week' : 'day');
+      chart.update('none');
+    });
+    ro.observe(document.querySelector('.chart-box'));
+
+    // Update colors if user toggles dark mode while page is open
+    matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => location.reload());
   })();
   </script>
 </body>
